@@ -1,0 +1,235 @@
+/****************************************引脚定义****************************************/
+
+//SG90舵机
+#define Servo_PWM   9    // SG90橙色线 ←→ Arduino 9
+
+//L298N直流电机驱动器
+#define DC_Pin1 5   // L298N IN3 ←→ Arduino  5 (T/C2)
+#define DC_Pin2 3   // L298N IN4 ←→ Arduino  6
+
+//HC SR04超声波测距模块
+#define SR_Trig 7       // HC SR04 Trig ←→ Arduino 7
+#define SR_Echo 6       // HC SR04 Echo ←→ Arduino 6
+#define SR_Vcc  8
+
+/****************************************库函数和公共变量定义****************************************/
+
+#include <Servo.h> // 引用舵机库
+Servo SG90;  // 动态调用舵机类
+
+
+int IN1 = 10; //定义 直流电机2的方向
+int IN2 = 11; //定义 直流电机2的方向
+float SR_Distance = 0;    // 定义 超声波测量距离
+float Distance[5] = {0};  //定义 超声波距离数组
+int pid_value = 0;
+/****************************************超声波测距(SR)相关函数****************************************/
+
+void SR_Init()//超声波初始化函数
+{
+  pinMode(SR_Trig, OUTPUT); // Trig ←→ Output
+  pinMode(SR_Echo, INPUT);  // Echo ←→ Input
+  pinMode(SR_Vcc, OUTPUT);
+  digitalWrite(SR_Vcc, HIGH);
+}
+
+float SR_Read()//超声波模块测距函数
+{
+  unsigned long Duration; // 定义脉持续时间Duration(单位: us)
+  float Distance;           // 定义距离Distance(单位: mm)
+  
+  //发送高电平脉冲，启动测量
+  digitalWrite(SR_Trig, LOW); 
+  delayMicroseconds(2); 
+  digitalWrite(SR_Trig, HIGH); 
+  delayMicroseconds(10); 
+  digitalWrite(SR_Trig, LOW);
+ 
+  // 测量超声波往返时间和计算距离
+  Duration = pulseIn(SR_Echo, HIGH);  // 测量超声波往返时间(单位: us)
+  Distance = Duration * 0.0175; // 计算距离(单位: cm)
+  Distance = (int(Distance*100.0))/100.0;
+  return Distance;
+}
+
+int dishandle()
+{
+  int temp = 0;
+  for(int i=0; i<5; i++){
+    Distance[i] = SR_Read(); //读取五个数据
+   // Serial.println(Distance[i]);
+    }
+  for(int i=0; i<5; i++)   //排序
+    for(int j=0; j<5-i; j++)
+    {
+      if(Distance[i] < Distance[i+1])
+      {
+        temp = Distance[i];
+        Distance[i] = Distance[i+1];
+        Distance[i+1] = temp;
+      }
+    }
+
+  return Distance[2];
+}
+
+
+
+/****************************************舵机控制(Servo)相关函数****************************************/
+void Servo_Init()   // 舵机初始化
+{
+    SG90.attach(Servo_PWM);  // 舵机信号的IO口 = Servo_PWM
+}
+
+/****************************************直流电机(DCMotor)相关函数****************************************/
+void DCMotor_Init()//直流电机初始化
+{
+  //规定IO口工作模式
+  pinMode(DC_Pin1, OUTPUT);
+  pinMode(DC_Pin2, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  
+  //预置低电平，使电机保持不动
+  digitalWrite(DC_Pin1, LOW);
+  digitalWrite(DC_Pin2, LOW);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+}
+
+
+/***************************小车运动函数*****************************/
+void Line(int Speed)
+{
+  float t;
+  if(Speed<120)
+    t = 0.95;
+  else 
+    t = 0.62;
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  analogWrite(DC_Pin1, Speed);
+  analogWrite(DC_Pin2, Speed*t);
+  delay(2);
+}
+void Back(int Speed)
+{
+  float t;
+  if(Speed<120)
+    t = 0.95;
+  else 
+    t = 0.62;
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  analogWrite(DC_Pin1, Speed);
+  analogWrite(DC_Pin2, Speed*t);
+  delay(2);
+}
+
+void Stop()
+{
+  analogWrite(DC_Pin1, 0);
+  analogWrite(DC_Pin1, 0);
+  delay(100);
+}
+
+/************************************PID*************************************************/
+struct _pid{  
+float SetAngle; 
+float SetSpeed;         //定义设定值  
+float ActualAngle;
+float ActualSpeed;      //定义实际值  
+float err1,err2;              //定义偏差值  
+float err1_last,err2_last;         //定义上一个偏差值  
+float Kp1,Ki1,Kd1;      //定义角度位置环比例、积分、微分系数  
+float Kp2,Ki2,Kd2;      //定义速度环比例、积分、微分系数  
+float voltage1,voltage2;          //定义电压值（控制执行器的变量）  
+float integral1,integral2;         //定义积分值  
+}pid;  
+
+
+//项目中获取到的参数  
+void PID_init(void){  
+    Serial.println("PID_init begin \n");  
+    pid.SetSpeed=0.0;        //设定值 
+    pid.SetAngle=0.0;        //设定值 
+    pid.err1=0.0;             //偏差值  
+    pid.err1_last=0.0;        //上一个偏差值  
+    pid.voltage1=0.0;         //电压值（控制执行器的变量）
+    pid.integral1=0.0;        //积分值  
+    pid.err2=0.0;             //偏差值  
+    pid.err2_last=0.0;        //上一个偏差值  
+    pid.voltage2=0.0;         //电压值（控制执行器的变量）
+    pid.integral2=0.0;        //积分值  
+ 
+    pid.Kp2=10;             //自己设定速度环比例系数 
+    pid.Ki2=0.2;           //自己设定速度环积分系数 
+    pid.Kd2=-5;             //自己设定速度环微分系数 
+    Serial.println("PID_init end \n");  
+}  
+  
+int PID_Cal(float speed, float ActualSpeed){  // 速度环
+    //ActualSpeed = ActualSpeed;    //转化成弧度值
+    pid.SetSpeed=speed;                     //设定值  
+    pid.err2=pid.SetSpeed-ActualSpeed;   //设定值-实际值  
+  //  pid.integral2+=pid.err2;  //积分值，偏差累加
+  
+  /* 积分抗饱和 积分极限待调 */
+    if(pid.integral2 > 500) 
+    {
+      if(pid.err2 < 0)
+        pid.integral2+=pid.err2;
+    }
+    else if(pid.integral2 < -500)
+    {
+        if(pid.err2 > 0)
+        pid.integral2+=pid.err2;
+    }
+    else
+      pid.integral2+=pid.err2;
+
+    if(pid.err2<1&&pid.err2>-1)
+      pid.err2 = 0;
+  
+    pid.voltage2=pid.Kp2*pid.err2+pid.Ki2*pid.integral2+pid.Kd2*(pid.err2-pid.err2_last);  
+    pid.err2_last=pid.err2;                   //上一个偏差值 
+  
+    return pid.voltage2;                 //返回  
+}  
+/****************************************PID END*****************************************/
+
+
+/************************************************初始化函数**************************************************/
+void setup() 
+{
+  Serial.begin(9600);
+  SR_Init();           // 超声波模块初始化
+  Servo_Init();        // 舵机初始化
+  DCMotor_Init();      // 直流电机初始化
+//  pinMode(Touch, INPUT);
+//  istouch = digitalRead(Touch);
+//  Serial.println(istouch);
+//  while(((istouch = digitalRead(Touch)) == 0 ));
+  PID_init();
+}
+
+void loop()
+{
+  SR_Distance = dishandle();
+  Serial.print("Distance:  ");
+  Serial.print(SR_Distance);
+  SG90.write(52);  
+  pid_value = PID_Cal(25, SR_Distance);
+  if(pid_value>250)
+    pid_value = 250;
+  else if(pid_value<-250)
+    pid_value = -250;
+  Serial.print(" pid_value: ");
+  Serial.println(pid_value);
+  if(pid_value>0)
+    Back(pid_value);
+  else
+    Line(-pid_value);
+  //Line(pid_val);
+}
+
